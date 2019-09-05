@@ -23,6 +23,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"bufio"
+	"log"
+	"sync"
+	"regexp"
+	"hash/fnv"
 
 	colorable "github.com/mattn/go-colorable"
 	"github.com/square/certigo/lib"
@@ -55,6 +60,8 @@ var (
 	connectPem      = connect.Flag("pem", "Write output as PEM blocks instead of human-readable format.").Short('m').Bool()
 	connectJSON     = connect.Flag("json", "Write output as machine-readable JSON format.").Short('j').Bool()
 	connectVerify   = connect.Flag("verify", "Verify certificate chain.").Bool()
+	connectBulkRead = connect.Flag("bulkread", "Takes a text file with IPs. The format of the file is one IP address per line.").Short('b').String()
+	connectBulkRoutines = connect.Flag("bulkroutines", "The number of concurrent routines").Short('r').Int()
 
 	verify         = app.Command("verify", "Verify a certificate chain from file/stdin against a name.")
 	verifyFile     = verify.Arg("file", "Certificate file to dump (or stdin if not specified).").ExistingFile()
@@ -125,50 +132,209 @@ func main() {
 		if connectStartTLS == nil && connectIdentity != nil {
 			fmt.Fprintln(os.Stderr, "error: --identity can only be used with --start-tls")
 			os.Exit(1)
-		}
-		connState, cri, err := starttls.GetConnectionState(
-			*connectStartTLS, *connectName, *connectTo, *connectIdentity,
-			*connectCert, *connectKey, *connectProxy, *connectTimeout)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s\n", strings.TrimSuffix(err.Error(), "\n"))
-			os.Exit(1)
-		}
-		result.TLSConnectionState = connState
-		result.CertificateRequestInfo = cri
-		for _, cert := range connState.PeerCertificates {
-			if *connectPem {
-				pem.Encode(os.Stdout, lib.EncodeX509ToPEM(cert, nil))
-			} else {
-				result.Certificates = append(result.Certificates, cert)
-			}
-		}
-
-		var hostname string
-		if *connectName != "" {
-			hostname = *connectName
 		} else {
-			hostname = strings.Split(*connectTo, ":")[0]
-		}
-		verifyResult := lib.VerifyChain(connState.PeerCertificates, connState.OCSPResponse, hostname, *connectCaPath)
-		result.VerifyResult = &verifyResult
+			if connectBulkRead != nil {
+				
+				var ips = readFileIPs(*connectBulkRead)
+				totalips := len(ips)
+				var wg sync.WaitGroup
+				wg.Add(totalips)
+				maxroutines := *connectBulkRoutines
+				sem := make(chan int, maxroutines)
 
-		if *connectJSON {
-			blob, _ := json.Marshal(result)
-			fmt.Println(string(blob))
-		} else if !*connectPem {
-			fmt.Fprintf(
-				stdout, "%s\n\n",
-				lib.EncodeTLSInfoToText(result.TLSConnectionState, result.CertificateRequestInfo))
+				path := "results" 
+				if _, err := os.Stat(path); os.IsNotExist(err) {
+					os.Mkdir(path, 0755)
+				}
 
-			for i, cert := range result.Certificates {
-				fmt.Fprintf(stdout, "** CERTIFICATE %d **\n", i+1)
-				fmt.Fprintf(stdout, "%s\n\n", lib.EncodeX509ToText(cert, terminalWidth, *verbose))
+				certs_channel := make(chan string, 1500000)
+				certspath := path + "/certs.txt"
+				os.Create(certspath)
+				go func(certs_channel chan string) {
+					filecerts, errcerts := os.OpenFile(certspath, os.O_WRONLY|os.O_APPEND, 0644)
+					if errcerts != nil {
+						log.Fatalf("failed opening file: %s", errcerts)
+					}
+					for true {
+						msg := <-certs_channel
+						if msg == "done" {
+							break
+						}
+						filecerts.WriteString(msg + "\n")
+					}
+					filecerts.Close()
+				} (certs_channel)
+
+				errors_channel := make(chan string, 1500000)
+				errorspath := path + "/errors.txt"
+				os.Create(errorspath)
+				go func(errors_channel chan string) {
+					fileerrors, errerrors := os.OpenFile(errorspath, os.O_WRONLY|os.O_APPEND, 0644)
+					if errerrors != nil {
+						log.Fatalf("failed opening file: %s", errerrors)
+					}
+					for true {
+						msg := <-errors_channel
+						if msg == "done" {
+							break
+						}
+						fileerrors.WriteString(msg + "\n")
+					}
+					fileerrors.Close()
+				} (errors_channel)
+
+				type hasherrorcodes struct {
+					hashstring string
+					hash  uint32
+				}
+
+				hasherrors_channel := make(chan hasherrorcodes)
+				errorcodespath := path + "/hasherrorcodes/" 
+				if _, err := os.Stat(errorcodespath); os.IsNotExist(err) {
+					os.Mkdir(errorcodespath, 0755)
+				}
+				go func(hasherrors_channel chan hasherrorcodes) {
+					var hashcoderrortable map[uint32]string
+					hashcoderrortable = make(map[uint32] string)
+					for true {
+						msg := <-hasherrors_channel
+						if msg.hashstring == "done" {
+							break
+						}
+						_, ok := hashcoderrortable[msg.hash]
+						if ! ok {
+							hashcoderrortable[msg.hash] = msg.hashstring
+							errorfile := errorcodespath + fmt.Sprint(msg.hash)
+							if _, err := os.Stat(errorfile); os.IsNotExist(err) {
+								f, err := os.Create(errorfile)
+								if err != nil {
+									fmt.Fprintf(os.Stderr, "%s\n", strings.TrimSuffix(err.Error(), "\n"))
+								}
+								w := bufio.NewWriter(f)
+								w.WriteString(msg.hashstring)
+								w.Flush()
+								f.Close()
+							}
+						}
+					}
+				} (hasherrors_channel)
+				
+				// Match IPv4 + IPv4:port
+				regexmatch := `(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])[:]*[0-9]*`
+				re := regexp.MustCompile(regexmatch)
+				
+				for _, ip_addr := range ips {
+					sem <- 1
+					go func(ip_addr string, certs_channel chan string, errors_channel chan string, hasherrors_channel chan hasherrorcodes, wg *sync.WaitGroup) {
+						connectTo := ip_addr + ":443"
+						connState, cri, err := starttls.GetConnectionState(
+							*connectStartTLS, *connectName, connectTo, *connectIdentity,
+							*connectCert, *connectKey, *connectProxy, *connectTimeout)
+						if err != nil {
+							errorstring_ := re.ReplaceAllString(strings.TrimSuffix(err.Error(), "\n"), "")
+							errorhash_ := FNV32a(errorstring_)
+														
+							hasherrors_channel <- hasherrorcodes{hashstring: errorstring_, hash: errorhash_}
+
+							jsonerror := "{\"" + string(ip_addr) + "\":" + fmt.Sprint(errorhash_) + "}"
+							errors_channel <- jsonerror
+
+						} else {
+							result.TLSConnectionState = connState
+							result.CertificateRequestInfo = cri
+							for _, cert := range connState.PeerCertificates {
+								if *connectPem {
+									pem.Encode(os.Stdout, lib.EncodeX509ToPEM(cert, nil))
+								} else {
+									result.Certificates = append(result.Certificates, cert)
+								}
+							}
+
+							var hostname string
+							if *connectName != "" {
+								hostname = *connectName
+							} else {
+								hostname = strings.Split(connectTo, ":")[0]
+							}
+							verifyResult := lib.VerifyChain(connState.PeerCertificates, connState.OCSPResponse, hostname, *connectCaPath)
+							result.VerifyResult = &verifyResult
+
+							if *connectJSON {
+								blob, _ := json.Marshal(result)
+
+								jsoncert := "{\"" + string(ip_addr) + "\":" + string(blob) + "}"
+								certs_channel <- jsoncert
+							} else if !*connectPem {
+								fmt.Fprintf(
+									stdout, "%s\n\n",
+									lib.EncodeTLSInfoToText(result.TLSConnectionState, result.CertificateRequestInfo))
+
+								for i, cert := range result.Certificates {
+									fmt.Fprintf(stdout, "** CERTIFICATE %d **\n", i+1)
+									fmt.Fprintf(stdout, "%s\n\n", lib.EncodeX509ToText(cert, terminalWidth, *verbose))
+								}
+								lib.PrintVerifyResult(stdout, *result.VerifyResult)
+							}
+
+							if *connectVerify && len(result.VerifyResult.Error) > 0 {
+								os.Exit(1)
+							}
+						}
+						<-sem
+						defer wg.Done()
+					}(ip_addr, certs_channel, errors_channel, hasherrors_channel, &wg)
+				}
+				wg.Wait() // Wait all routines to complete
+				certs_channel <- "done"
+				errors_channel <- "done"
+				hasherrors_channel <- hasherrorcodes{hashstring: "done", hash: 0}
+
+			} else {
+				connState, cri, err := starttls.GetConnectionState(
+					*connectStartTLS, *connectName, *connectTo, *connectIdentity,
+					*connectCert, *connectKey, *connectProxy, *connectTimeout)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "%s\n", strings.TrimSuffix(err.Error(), "\n"))
+					os.Exit(1)
+				}
+				result.TLSConnectionState = connState
+				result.CertificateRequestInfo = cri
+				for _, cert := range connState.PeerCertificates {
+					if *connectPem {
+						pem.Encode(os.Stdout, lib.EncodeX509ToPEM(cert, nil))
+					} else {
+						result.Certificates = append(result.Certificates, cert)
+					}
+				}
+
+				var hostname string
+				if *connectName != "" {
+					hostname = *connectName
+				} else {
+					hostname = strings.Split(*connectTo, ":")[0]
+				}
+				verifyResult := lib.VerifyChain(connState.PeerCertificates, connState.OCSPResponse, hostname, *connectCaPath)
+				result.VerifyResult = &verifyResult
+
+				if *connectJSON {
+					blob, _ := json.Marshal(result)
+					fmt.Println(string(blob))
+				} else if !*connectPem {
+					fmt.Fprintf(
+						stdout, "%s\n\n",
+						lib.EncodeTLSInfoToText(result.TLSConnectionState, result.CertificateRequestInfo))
+
+					for i, cert := range result.Certificates {
+						fmt.Fprintf(stdout, "** CERTIFICATE %d **\n", i+1)
+						fmt.Fprintf(stdout, "%s\n\n", lib.EncodeX509ToText(cert, terminalWidth, *verbose))
+					}
+					lib.PrintVerifyResult(stdout, *result.VerifyResult)
+				}
+
+				if *connectVerify && len(result.VerifyResult.Error) > 0 {
+					os.Exit(1)
+				}
 			}
-			lib.PrintVerifyResult(stdout, *result.VerifyResult)
-		}
-
-		if *connectVerify && len(result.VerifyResult.Error) > 0 {
-			os.Exit(1)
 		}
 	case verify.FullCommand():
 		file := inputFile(*verifyFile)
@@ -276,4 +442,30 @@ func readPassword(alias string) string {
 	}
 
 	return strings.TrimSuffix(string(password), "\n")
+}
+
+func readFileIPs(filename string) []string {
+	file, err := os.Open(fmt.Sprintf("%s", *connectBulkRead))
+	if err != nil {
+		log.Fatalf("failed opening file: %s", err)
+	}
+
+	scanner := bufio.NewScanner(file)
+	scanner.Split(bufio.ScanLines)
+	var txtlines []string
+
+	for scanner.Scan() {
+		txtlines = append(txtlines, scanner.Text())
+	}
+
+	file.Close()
+
+	return txtlines
+}
+
+func FNV32a(text string) uint32 {
+	algorithm := fnv.New32a()
+	algorithm.Write([]byte(text))
+
+	return algorithm.Sum32()
 }
