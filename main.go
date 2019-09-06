@@ -28,6 +28,7 @@ import (
 	"sync"
 	"regexp"
 	"hash/fnv"
+	"time"
 
 	colorable "github.com/mattn/go-colorable"
 	"github.com/square/certigo/lib"
@@ -136,52 +137,58 @@ func main() {
 			if connectBulkRead != nil {
 				
 				var ips = readFileIPs(*connectBulkRead)
-				totalips := len(ips)
 				var wg sync.WaitGroup
+				totalips := len(ips)
 				wg.Add(totalips)
-				maxroutines := *connectBulkRoutines
-				sem := make(chan int, maxroutines)
+				var channelqueusize = *connectBulkRoutines
+				//sem := make(chan int, maxroutines)
 
 				path := "results" 
 				if _, err := os.Stat(path); os.IsNotExist(err) {
 					os.Mkdir(path, 0755)
 				}
 
-				certs_channel := make(chan string, 1500000)
+				block_channel := make(chan bool, channelqueusize)
+
+				certs_channel := make(chan string)
 				certspath := path + "/certs.txt"
 				os.Create(certspath)
-				go func(certs_channel chan string) {
+				go func(certs_channel chan string, block_channel chan bool) {
 					filecerts, errcerts := os.OpenFile(certspath, os.O_WRONLY|os.O_APPEND, 0644)
 					if errcerts != nil {
 						log.Fatalf("failed opening file: %s", errcerts)
 					}
+					var msg = ""
 					for true {
-						msg := <-certs_channel
+						msg = <-certs_channel
 						if msg == "done" {
 							break
 						}
 						filecerts.WriteString(msg + "\n")
+						<-block_channel
 					}
 					filecerts.Close()
-				} (certs_channel)
+				} (certs_channel, block_channel)
 
-				errors_channel := make(chan string, 1500000)
+				errors_channel := make(chan string)
 				errorspath := path + "/errors.txt"
 				os.Create(errorspath)
-				go func(errors_channel chan string) {
+				go func(errors_channel chan string, block_channel chan bool) {
 					fileerrors, errerrors := os.OpenFile(errorspath, os.O_WRONLY|os.O_APPEND, 0644)
 					if errerrors != nil {
 						log.Fatalf("failed opening file: %s", errerrors)
 					}
+					var msg = ""
 					for true {
-						msg := <-errors_channel
+						msg = <-errors_channel
 						if msg == "done" {
 							break
 						}
 						fileerrors.WriteString(msg + "\n")
+						<-block_channel
 					}
 					fileerrors.Close()
-				} (errors_channel)
+				} (errors_channel, block_channel)
 
 				type hasherrorcodes struct {
 					hashstring string
@@ -193,11 +200,12 @@ func main() {
 				if _, err := os.Stat(errorcodespath); os.IsNotExist(err) {
 					os.Mkdir(errorcodespath, 0755)
 				}
-				go func(hasherrors_channel chan hasherrorcodes) {
+				go func(hasherrors_channel chan hasherrorcodes, block_channel chan bool) {
 					var hashcoderrortable map[uint32]string
 					hashcoderrortable = make(map[uint32] string)
+					var msg = hasherrorcodes{hashstring: "dummy", hash: 0}
 					for true {
-						msg := <-hasherrors_channel
+						msg = <-hasherrors_channel
 						if msg.hashstring == "done" {
 							break
 						}
@@ -216,16 +224,22 @@ func main() {
 								f.Close()
 							}
 						}
+						<-block_channel
 					}
-				} (hasherrors_channel)
+				} (hasherrors_channel, block_channel)
 				
 				// Match IPv4 + IPv4:port
-				regexmatch := `(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])[:]*[0-9]*`
+				regexmatch := `(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])[:]*[0-9]*|[:]*[0-9]*`
 				re := regexp.MustCompile(regexmatch)
-				
-				for _, ip_addr := range ips {
-					sem <- 1
+				for counter, ip_addr := range ips {
+					//sem <- 1
+					if counter % 5000 == 0 {
+						time.Sleep(500 * time.Millisecond)
+					}
+					block_channel <-true
 					go func(ip_addr string, certs_channel chan string, errors_channel chan string, hasherrors_channel chan hasherrorcodes, wg *sync.WaitGroup) {
+						<-block_channel
+						result_goroutine := lib.SimpleResult{}
 						connectTo := ip_addr + ":443"
 						connState, cri, err := starttls.GetConnectionState(
 							*connectStartTLS, *connectName, connectTo, *connectIdentity,
@@ -235,18 +249,21 @@ func main() {
 							errorhash_ := FNV32a(errorstring_)
 														
 							hasherrors_channel <- hasherrorcodes{hashstring: errorstring_, hash: errorhash_}
+							block_channel <-false
 
 							jsonerror := "{\"" + string(ip_addr) + "\":" + fmt.Sprint(errorhash_) + "}"
+
 							errors_channel <- jsonerror
+							block_channel <-false
 
 						} else {
-							result.TLSConnectionState = connState
-							result.CertificateRequestInfo = cri
+							result_goroutine.TLSConnectionState = connState
+							result_goroutine.CertificateRequestInfo = cri
 							for _, cert := range connState.PeerCertificates {
 								if *connectPem {
 									pem.Encode(os.Stdout, lib.EncodeX509ToPEM(cert, nil))
 								} else {
-									result.Certificates = append(result.Certificates, cert)
+									result_goroutine.Certificates = append(result_goroutine.Certificates, cert)
 								}
 							}
 
@@ -257,30 +274,32 @@ func main() {
 								hostname = strings.Split(connectTo, ":")[0]
 							}
 							verifyResult := lib.VerifyChain(connState.PeerCertificates, connState.OCSPResponse, hostname, *connectCaPath)
-							result.VerifyResult = &verifyResult
+							result_goroutine.VerifyResult = &verifyResult
 
 							if *connectJSON {
-								blob, _ := json.Marshal(result)
+								blob, _ := json.Marshal(result_goroutine)
 
 								jsoncert := "{\"" + string(ip_addr) + "\":" + string(blob) + "}"
 								certs_channel <- jsoncert
+								block_channel <-false
 							} else if !*connectPem {
 								fmt.Fprintf(
 									stdout, "%s\n\n",
-									lib.EncodeTLSInfoToText(result.TLSConnectionState, result.CertificateRequestInfo))
+									lib.EncodeTLSInfoToText(result_goroutine.TLSConnectionState, result_goroutine.CertificateRequestInfo))
 
-								for i, cert := range result.Certificates {
+								for i, cert := range result_goroutine.Certificates {
 									fmt.Fprintf(stdout, "** CERTIFICATE %d **\n", i+1)
 									fmt.Fprintf(stdout, "%s\n\n", lib.EncodeX509ToText(cert, terminalWidth, *verbose))
 								}
-								lib.PrintVerifyResult(stdout, *result.VerifyResult)
+								lib.PrintVerifyResult(stdout, *result_goroutine.VerifyResult)
 							}
 
-							if *connectVerify && len(result.VerifyResult.Error) > 0 {
+							if *connectVerify && len(result_goroutine.VerifyResult.Error) > 0 {
 								os.Exit(1)
 							}
 						}
-						<-sem
+						
+						//<-sem
 						defer wg.Done()
 					}(ip_addr, certs_channel, errors_channel, hasherrors_channel, &wg)
 				}
