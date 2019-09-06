@@ -63,6 +63,7 @@ var (
 	connectVerify   = connect.Flag("verify", "Verify certificate chain.").Bool()
 	connectBulkRead = connect.Flag("bulkread", "Takes a text file with IPs. The format of the file is one IP address per line.").Short('b').String()
 	connectBulkRoutines = connect.Flag("bulkroutines", "The number of concurrent routines").Short('r').Int()
+	connectBulkOutputFolder = connect.Flag("bulkoutputfolder", "The name of the output folder to store the results").Short('o').String()
 
 	verify         = app.Command("verify", "Verify a certificate chain from file/stdin against a name.")
 	verifyFile     = verify.Arg("file", "Certificate file to dump (or stdin if not specified).").ExistingFile()
@@ -141,9 +142,12 @@ func main() {
 				totalips := len(ips)
 				wg.Add(totalips)
 				var channelqueusize = *connectBulkRoutines
-				//sem := make(chan int, maxroutines)
 
-				path := "results" 
+				var path = "results"
+				if *connectBulkOutputFolder != "" {
+					path = *connectBulkOutputFolder
+				}
+
 				if _, err := os.Stat(path); os.IsNotExist(err) {
 					os.Mkdir(path, 0755)
 				}
@@ -232,7 +236,6 @@ func main() {
 				regexmatch := `(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])[:]*[0-9]*|[:]*[0-9]*`
 				re := regexp.MustCompile(regexmatch)
 				for counter, ip_addr := range ips {
-					//sem <- 1
 					if counter % 5000 == 0 {
 						time.Sleep(500 * time.Millisecond)
 					}
@@ -298,8 +301,6 @@ func main() {
 								os.Exit(1)
 							}
 						}
-						
-						//<-sem
 						defer wg.Done()
 					}(ip_addr, certs_channel, errors_channel, hasherrors_channel, &wg)
 				}
