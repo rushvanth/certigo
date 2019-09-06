@@ -21,7 +21,7 @@ Certigo is a utility to examine and validate certificates to help with debugging
 
 To install certigo, simply use:
 
-    go get -u github.com/square/certigo
+    go get -u github.com/pgigis/certigo
 
 On macOS you can also use homebrew to install:
 
