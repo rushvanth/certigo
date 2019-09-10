@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"net"
 	"time"
+	"errors"
 )
 
 type timeoutError struct{}
@@ -38,9 +39,13 @@ func dialWithDialer(dialer Dialer, timeout time.Duration, network, addr string, 
 		err = conn.Handshake()
 	} else {
 		go func() {
+			defer func() {
+				if (recover() != nil) {
+					errChannel <- errors.New("Unknown Handshake Error from tls/crypto library")
+				}
+			}()
 			errChannel <- conn.Handshake()
 		}()
-
 		err = <-errChannel
 	}
 
