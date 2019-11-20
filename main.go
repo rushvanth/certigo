@@ -247,7 +247,7 @@ func main() {
 					}
 
 					for curRoutines() >= max_routines_in_parallel {
-						time.Sleep(500 * time.Millisecond)
+						time.Sleep(100 * time.Millisecond)
 					}
 
 					addRoutine()
