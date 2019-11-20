@@ -74,6 +74,9 @@ var (
 	verifyJSON     = verify.Flag("json", "Write output as machine-readable JSON format.").Short('j').Bool()
 )
 
+var mu 						sync.Mutex // guards parallel changes
+var cur_routines_running 	int
+
 const minWidth = 60
 const maxWidth = 80
 
@@ -142,6 +145,8 @@ func main() {
 				totalips := len(ips)
 				wg.Add(totalips)
 				var channelqueusize = *connectBulkRoutines
+				var max_routines_in_parallel = *connectBulkRoutines
+				var connectTimeout_time = *connectTimeout
 
 				var path = "results"
 				if *connectBulkOutputFolder != "" {
@@ -231,14 +236,22 @@ func main() {
 						<-block_channel
 					}
 				} (hasherrors_channel, block_channel)
-				
+
 				// Match IPv4 + IPv4:port
 				regexmatch := `(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])[:]*[0-9]*|[:]*[0-9]*`
 				re := regexp.MustCompile(regexmatch)
+				cur_routines_running = 0
+
 				for counter, ip_addr := range ips {
 					if counter % 5000 == 0 {
-						time.Sleep(500 * time.Millisecond)
+						time.Sleep(750 * time.Millisecond)
 					}
+
+					if curRoutines() >= max_routines_in_parallel {
+						time.Sleep((1000 * (connectTimeout_time/4) )* time.Millisecond)
+					}
+
+					addRoutine()
 					block_channel <-true
 					go func(ip_addr string, certs_channel chan string, errors_channel chan string, hasherrors_channel chan hasherrorcodes, wg *sync.WaitGroup) {
 						<-block_channel
@@ -258,6 +271,7 @@ func main() {
 
 							errors_channel <- jsonerror
 							block_channel <-false
+							substractRoutine()
 
 						} else {
 							result_goroutine.TLSConnectionState = connState
@@ -285,6 +299,8 @@ func main() {
 								jsoncert := "{\"" + string(ip_addr) + "\":" + string(blob) + "}"
 								certs_channel <- jsoncert
 								block_channel <-false
+								substractRoutine()
+
 							} else if !*connectPem {
 								fmt.Fprintf(
 									stdout, "%s\n\n",
@@ -488,4 +504,23 @@ func FNV32a(text string) uint32 {
 	algorithm.Write([]byte(text))
 
 	return algorithm.Sum32()
+}
+
+func addRoutine() {
+	mu.Lock()
+	cur_routines_running++
+	mu.Unlock()
+}
+
+func substractRoutine() {
+	mu.Lock()
+	cur_routines_running--
+	mu.Unlock()
+}
+
+func curRoutines() int {
+	mu.Lock()
+	r := cur_routines_running
+	mu.Unlock()
+	return r
 }
