@@ -146,7 +146,6 @@ func main() {
 				wg.Add(totalips)
 				var channelqueusize = *connectBulkRoutines
 				var max_routines_in_parallel = *connectBulkRoutines
-				var connectTimeout_time = *connectTimeout
 
 				var path = "results"
 				if *connectBulkOutputFolder != "" {
@@ -247,8 +246,8 @@ func main() {
 						time.Sleep(750 * time.Millisecond)
 					}
 
-					if curRoutines() >= max_routines_in_parallel {
-						time.Sleep((1000 * (connectTimeout_time/4) )* time.Millisecond)
+					for curRoutines() >= max_routines_in_parallel {
+						time.Sleep(500 * time.Millisecond)
 					}
 
 					addRoutine()
