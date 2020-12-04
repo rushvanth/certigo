@@ -30,12 +30,10 @@ import (
 	"github.com/square/certigo/starttls/ldap"
 	"github.com/square/certigo/starttls/mysql"
 	pq "github.com/square/certigo/starttls/psql"
-
-	http_dialer "github.com/mwitkow/go-http-dialer"
 )
 
 // Protocols are the names of supported protocols
-var Protocols []string = []string{"mysql", "postgres", "psql", "smtp", "ldap", "ftp", "imap"}
+var Protocols = []string{"mysql", "postgres", "psql", "smtp", "ldap", "ftp", "imap"}
 
 type connectResult struct {
 	state *tls.ConnectionState
@@ -142,10 +140,10 @@ func GetConnectionState(startTLSType, connectName, connectTo, identity, clientCe
 	}
 
 	if connectProxy != nil {
-		dialer = http_dialer.New(
-			connectProxy,
-			http_dialer.WithDialer(dialer.(*net.Dialer)),
-			http_dialer.WithTls(tlsConfig))
+		dialer, err = wrapDialerWithProxy(dialer, connectProxy, tlsConfig)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	go func() {

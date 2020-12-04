@@ -88,8 +88,8 @@ func errorFromErrors(errs []error) error {
 // data may be in plain-text PEM files, DER-encoded certificates or PKCS7
 // envelopes, or PKCS12/JCEKS keystores. All inputs will be converted to PEM
 // blocks and passed to the callback.
-func ReadAsPEMFromFiles(files []*os.File, format string, password func(string) string, callback func(*pem.Block)) error {
-	errs := []error{}
+func ReadAsPEMFromFiles(files []*os.File, format string, password func(string) string, callback func(*pem.Block, string) error) error {
+	var errs []error
 	for _, file := range files {
 		reader := bufio.NewReaderSize(file, 4)
 		format, err := formatForFile(reader, file.Name(), format)
@@ -109,7 +109,7 @@ func ReadAsPEMFromFiles(files []*os.File, format string, password func(string) s
 // be in plain-text PEM files, DER-encoded certificates or PKCS7 envelopes, or
 // PKCS12/JCEKS keystores. All inputs will be converted to PEM blocks and
 // passed to the callback.
-func ReadAsPEM(readers []io.Reader, format string, password func(string) string, callback func(*pem.Block)) error {
+func ReadAsPEM(readers []io.Reader, format string, password func(string) string, callback func(*pem.Block, string) error) error {
 	errs := []error{}
 	for _, r := range readers {
 		reader := bufio.NewReaderSize(r, 4)
@@ -130,7 +130,7 @@ func ReadAsPEM(readers []io.Reader, format string, password func(string) string,
 // inputs. Input data may be in plain-text PEM files, DER-encoded certificates
 // or PKCS7 envelopes, or PKCS12/JCEKS keystores. All inputs will be converted
 // to X.509 certificates (private keys are skipped) and passed to the callback.
-func ReadAsX509FromFiles(files []*os.File, format string, password func(string) string, callback func(*x509.Certificate, error)) error {
+func ReadAsX509FromFiles(files []*os.File, format string, password func(string) string, callback func(*x509.Certificate, string, error) error) error {
 	errs := []error{}
 	for _, file := range files {
 		reader := bufio.NewReaderSize(file, 4)
@@ -151,7 +151,7 @@ func ReadAsX509FromFiles(files []*os.File, format string, password func(string) 
 // data may be in plain-text PEM files, DER-encoded certificates or PKCS7
 // envelopes, or PKCS12/JCEKS keystores. All inputs will be converted to X.509
 // certificates (private keys are skipped) and passed to the callback.
-func ReadAsX509(readers []io.Reader, format string, password func(string) string, callback func(*x509.Certificate, error)) error {
+func ReadAsX509(readers []io.Reader, format string, password func(string) string, callback func(*x509.Certificate, string, error) error) error {
 	errs := []error{}
 	for _, r := range readers {
 		reader := bufio.NewReaderSize(r, 4)
@@ -168,39 +168,46 @@ func ReadAsX509(readers []io.Reader, format string, password func(string) string
 	return errorFromErrors(errs)
 }
 
-func pemToX509(callback func(*x509.Certificate, error)) func(*pem.Block) {
-	return func(block *pem.Block) {
+func pemToX509(callback func(*x509.Certificate, string, error) error) func(*pem.Block, string) error {
+	return func(block *pem.Block, format string) error {
 		switch block.Type {
 		case "CERTIFICATE":
 			cert, err := x509.ParseCertificate(block.Bytes)
-			callback(cert, err)
+			return callback(cert, format, err)
 		case "PKCS7":
 			certs, err := pkcs7.ExtractCertificates(block.Bytes)
 			if err == nil {
 				for _, cert := range certs {
-					callback(cert, nil)
+					return callback(cert, format, nil)
 				}
 			} else {
-				callback(nil, err)
+				return callback(nil, format, err)
 			}
+		case "CERTIFICATE REQUEST":
+			fmt.Println(red.SprintfFunc()("warning: certificate requests are not supported"))
 		}
+		return nil
 	}
 }
 
 // readCertsFromStream takes some input and converts it to PEM blocks.
-func readCertsFromStream(reader io.Reader, filename string, format string, password func(string) string, callback func(*pem.Block)) error {
+func readCertsFromStream(reader io.Reader, filename string, format string, password func(string) string, callback func(*pem.Block, string) error) error {
 	headers := map[string]string{}
 	if filename != "" && filename != os.Stdin.Name() {
 		headers[fileHeader] = filename
 	}
 
-	switch strings.TrimSpace(format) {
+	format = strings.TrimSpace(format)
+	switch format {
 	case "PEM":
 		scanner := pemScanner(reader)
 		for scanner.Scan() {
 			block, _ := pem.Decode(scanner.Bytes())
 			block.Headers = mergeHeaders(block.Headers, headers)
-			callback(block)
+			err := callback(block, format)
+			if err != nil {
+				return err
+			}
 		}
 		return nil
 	case "DER":
@@ -211,14 +218,20 @@ func readCertsFromStream(reader io.Reader, filename string, format string, passw
 		x509Certs, err0 := x509.ParseCertificates(data)
 		if err0 == nil {
 			for _, cert := range x509Certs {
-				callback(EncodeX509ToPEM(cert, headers))
+				err := callback(EncodeX509ToPEM(cert, headers), format)
+				if err != nil {
+					return err
+				}
 			}
 			return nil
 		}
 		p7bBlocks, err1 := pkcs7.ParseSignedData(data)
 		if err1 == nil {
 			for _, block := range p7bBlocks {
-				callback(pkcs7ToPem(block, headers))
+				err := callback(pkcs7ToPem(block, headers), format)
+				if err != nil {
+					return err
+				}
 			}
 			return nil
 		}
@@ -234,7 +247,10 @@ func readCertsFromStream(reader io.Reader, filename string, format string, passw
 		}
 		for _, block := range blocks {
 			block.Headers = mergeHeaders(block.Headers, headers)
-			callback(block)
+			err := callback(block, format)
+			if err != nil {
+				return err
+			}
 		}
 		return nil
 	case "JCEKS":
@@ -244,20 +260,32 @@ func readCertsFromStream(reader io.Reader, filename string, format string, passw
 		}
 		for _, alias := range keyStore.ListCerts() {
 			cert, _ := keyStore.GetCert(alias)
-			callback(EncodeX509ToPEM(cert, mergeHeaders(headers, map[string]string{nameHeader: alias})))
+			err := callback(EncodeX509ToPEM(cert, mergeHeaders(headers, map[string]string{nameHeader: alias})), format)
+			if err != nil {
+				return err
+			}
 		}
 		for _, alias := range keyStore.ListPrivateKeys() {
 			key, certs, err := keyStore.GetPrivateKeyAndCerts(alias, []byte(password(alias)))
 			if err != nil {
 				return fmt.Errorf("unable to parse keystore: %s\n", err)
 			}
-			block, err := keyToPem(key, mergeHeaders(headers, map[string]string{nameHeader: alias}))
+
+			mergedHeaders := mergeHeaders(headers, map[string]string{nameHeader: alias})
+
+			block, err := keyToPem(key, mergedHeaders)
 			if err != nil {
 				return fmt.Errorf("problem reading key: %s\n", err)
 			}
-			callback(block)
+
+			if err := callback(block, format); err != nil {
+				return err
+			}
+
 			for _, cert := range certs {
-				callback(EncodeX509ToPEM(cert, mergeHeaders(headers, map[string]string{nameHeader: alias})))
+				if err = callback(EncodeX509ToPEM(cert, mergedHeaders), format); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
