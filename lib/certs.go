@@ -147,6 +147,18 @@ func ReadAsX509FromFiles(files []*os.File, format string, password func(string) 
 	return errorFromErrors(errs)
 }
 
+// Custom Function | pgigis
+func ReadAsX509String(X509text string, format string, password func(string) string, callback func(*x509.Certificate, string, error) error) error {
+	errs := []error{}
+
+	err := readCertsFromString(X509text, format, password, pemToX509(callback))
+	if err != nil {
+		errs = append(errs, err)
+	}
+	return errorFromErrors(errs)
+}
+
+
 // ReadAsX509 will read X.509 certificates from the given set of inputs. Input
 // data may be in plain-text PEM files, DER-encoded certificates or PKCS7
 // envelopes, or PKCS12/JCEKS keystores. All inputs will be converted to X.509
@@ -172,7 +184,9 @@ func pemToX509(callback func(*x509.Certificate, string, error) error) func(*pem.
 	return func(block *pem.Block, format string) error {
 		switch block.Type {
 		case "CERTIFICATE":
+			
 			cert, err := x509.ParseCertificate(block.Bytes)
+
 			return callback(cert, format, err)
 		case "PKCS7":
 			certs, err := pkcs7.ExtractCertificates(block.Bytes)
@@ -190,20 +204,44 @@ func pemToX509(callback func(*x509.Certificate, string, error) error) func(*pem.
 	}
 }
 
+func readCertsFromString(X509text string, format string, password func(string) string, callback func(*pem.Block, string) error) error {
+	format = strings.TrimSpace(format)
+
+	switch format {
+	case "PEM":
+		b := []byte(X509text)
+		block, _ := pem.Decode(b)
+		if block != nil {
+			err := callback(block, format)
+			fmt.Println("b")
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("unknown file type '%s'\n", format)
+}
+
 // readCertsFromStream takes some input and converts it to PEM blocks.
 func readCertsFromStream(reader io.Reader, filename string, format string, password func(string) string, callback func(*pem.Block, string) error) error {
 	headers := map[string]string{}
 	if filename != "" && filename != os.Stdin.Name() {
 		headers[fileHeader] = filename
 	}
+	fmt.Println(headers,"eee")
 
 	format = strings.TrimSpace(format)
 	switch format {
 	case "PEM":
+		
 		scanner := pemScanner(reader)
 		for scanner.Scan() {
+			fmt.Println("              ", string(scanner.Bytes()))
 			block, _ := pem.Decode(scanner.Bytes())
+			
 			block.Headers = mergeHeaders(block.Headers, headers)
+			
 			err := callback(block, format)
 			if err != nil {
 				return err
@@ -393,6 +431,7 @@ func pemScanner(reader io.Reader) *bufio.Scanner {
 	scanner := bufio.NewScanner(reader)
 
 	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		
 		block, rest := pem.Decode(data)
 		if block != nil {
 			size := len(data) - len(rest)
@@ -401,6 +440,5 @@ func pemScanner(reader io.Reader) *bufio.Scanner {
 
 		return 0, nil, nil
 	})
-
 	return scanner
 }
