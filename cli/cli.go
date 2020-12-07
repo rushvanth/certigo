@@ -96,19 +96,28 @@ func Run(args []string, tty terminal.Terminal) int {
 	case dump.FullCommand(): // Dump certificate
 
 		if dumpBulkRead != nil && *dumpBulkRead != "" {
-			var items = readFileIPs(*dumpBulkRead)
+			//var items = readFileIPs(*dumpBulkRead)
 			//totalItems := len(items)
 
 		//	var path = "results"
 		//	if *dumpBulkOutputFolder != "" {
 			//	path = *dumpBulkOutputFolder
 		//	}
-		
-			for _, item_val := range items {
-				line := strings.Split(item_val, " ")
+
+			file, err := os.Open(fmt.Sprintf("%s", *dumpBulkRead))
+			if err != nil {
+				log.Fatalf("failed opening file: %s", err)
+			}
+
+			scanner := bufio.NewScanner(file)
+			buf := make([]byte, 0, 64*1024)
+			scanner.Buffer(buf, 4096*4096)
+			for scanner.Scan() {
+				item_val := scanner.Text()
+
+				line := strings.Split(item_val, "\t")
 				hashkey := line[0]
 				hashcert := line[1]
-
 				formatted_hachcert := "-----BEGIN CERTIFICATE-----\n" + hashcert + "\n-----END CERTIFICATE-----\n"
 				
 				err = lib.ReadAsX509String(formatted_hachcert, *dumpType, tty.ReadPassword, func(cert *x509.Certificate, format string, err error) error {

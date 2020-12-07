@@ -213,7 +213,6 @@ func readCertsFromString(X509text string, format string, password func(string) s
 		block, _ := pem.Decode(b)
 		if block != nil {
 			err := callback(block, format)
-			fmt.Println("b")
 			if err != nil {
 				return err
 			}
