@@ -134,7 +134,7 @@ func Run(args []string, tty terminal.Terminal) int {
 					blob, _ := json.Marshal(result)
 
 					// open path and append to file
-					f, err := os.OpenFile(fmt.Sprintf("%s-translated.json", path), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+					f, err := os.OpenFile(fmt.Sprintf("%s%s.json", path, strings.Split(strings.Split(file.Name(),"\\")[len(strings.Split(file.Name(),"\\"))-1], ".")[0]), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 					if err != nil {
 						log.Fatalf(err.Error())
 					}
