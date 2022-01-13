@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/square/certigo/starttls/psql/oid"
+	"github.com/rushvanth/certigo/starttls/psql/oid"
 )
 
 func binaryEncode(parameterStatus *parameterStatus, x interface{}) []byte {

@@ -20,7 +20,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/square/certigo/starttls/psql/oid"
+	"github.com/rushvanth/certigo/starttls/psql/oid"
 )
 
 // Common error types

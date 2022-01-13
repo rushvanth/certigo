@@ -1,4 +1,4 @@
-module github.com/square/certigo
+module github.com/rushvanth/certigo
 
 require (
 	github.com/Masterminds/goutils v1.1.0 // indirect

@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/square/certigo/cli/terminal"
+	"github.com/rushvanth/certigo/cli/terminal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

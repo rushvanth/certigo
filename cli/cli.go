@@ -14,9 +14,9 @@ import (
 	"hash/fnv"
 	"time"
 
-	"github.com/square/certigo/cli/terminal"
-	"github.com/square/certigo/lib"
-	"github.com/square/certigo/starttls"
+	"github.com/rushvanth/certigo/cli/terminal"
+	"github.com/rushvanth/certigo/lib"
+	"github.com/rushvanth/certigo/starttls"
 	"gopkg.in/alecthomas/kingpin.v2"
 )
 
@@ -99,10 +99,10 @@ func Run(args []string, tty terminal.Terminal) int {
 			//var items = readFileIPs(*dumpBulkRead)
 			//totalItems := len(items)
 
-		//	var path = "results"
-		//	if *dumpBulkOutputFolder != "" {
-			//	path = *dumpBulkOutputFolder
-		//	}
+			var path = "results"
+			if *dumpBulkOutputFolder != "" {
+				path = *dumpBulkOutputFolder
+			}
 
 			file, err := os.Open(fmt.Sprintf("%s", *dumpBulkRead))
 			if err != nil {
@@ -115,14 +115,14 @@ func Run(args []string, tty terminal.Terminal) int {
 			for scanner.Scan() {
 				item_val := scanner.Text()
 
-				line := strings.Split(item_val, "\t")
+				line := strings.Split(item_val, ",")
 				hashkey := line[0]
 				hashcert := line[1]
 				formatted_hachcert := "-----BEGIN CERTIFICATE-----\n" + hashcert + "\n-----END CERTIFICATE-----\n"
 				
 				err = lib.ReadAsX509String(formatted_hachcert, *dumpType, tty.ReadPassword, func(cert *x509.Certificate, format string, err error) error {
 					if err != nil {
-						return fmt.Errorf("error parsing block: %s\n", strings.TrimSuffix(err.Error(), "\n"))
+						return fmt.Errorf("error parsing block: %s", strings.TrimSuffix(err.Error(), "\n"))
 					} else {
 						result.Certificates = []*x509.Certificate{cert}
 						//result.Formats = append(result.Formats, format)
@@ -132,7 +132,18 @@ func Run(args []string, tty terminal.Terminal) int {
 
 				if *dumpJSON {
 					blob, _ := json.Marshal(result)
-					fmt.Println(hashkey, string(blob), "\n")
+
+					// open path and append to file
+					f, err := os.OpenFile(fmt.Sprintf("%s-translated.json", path), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+					if err != nil {
+						log.Fatalf(err.Error())
+					}
+					defer f.Close()
+					// write hashkey and blob as string to file
+					if _, err = f.WriteString(fmt.Sprintf("%s %s\n", hashkey, string(blob))); err != nil {
+						log.Fatalf(err.Error())
+					}
+					fmt.Println(hashkey, string(blob))
 				} else {
 					for i, cert := range result.Certificates {
 						fmt.Fprintf(stdout, "** CERTIFICATE %d **\n", i+1)

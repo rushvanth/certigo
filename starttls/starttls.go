@@ -27,9 +27,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/square/certigo/starttls/ldap"
-	"github.com/square/certigo/starttls/mysql"
-	pq "github.com/square/certigo/starttls/psql"
+	"github.com/rushvanth/certigo/starttls/ldap"
+	"github.com/rushvanth/certigo/starttls/mysql"
+	pq "github.com/rushvanth/certigo/starttls/psql"
 )
 
 // Protocols are the names of supported protocols

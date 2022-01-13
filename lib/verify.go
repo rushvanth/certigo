@@ -84,7 +84,7 @@ func caBundle(caPath string) (*x509.CertPool, error) {
 
 	caFile, err := os.Open(caPath)
 	if err != nil {
-		return nil, fmt.Errorf("error opening CA bundle %s: %s\n", caPath, err)
+		return nil, fmt.Errorf("error opening CA bundle %s: %s", caPath, err)
 	}
 
 	bundle := x509.NewCertPool()
@@ -97,14 +97,14 @@ func caBundle(caPath string) (*x509.CertPool, error) {
 		},
 		func(cert *x509.Certificate, format string, err error) error {
 			if err != nil {
-				return fmt.Errorf("error parsing CA bundle: %s\n", err)
+				return fmt.Errorf("error parsing CA bundle: %s", err)
 			} else {
 				bundle.AddCert(cert)
 			}
 			return nil
 		})
 	if err != nil {
-		return nil, fmt.Errorf("error parsing CA bundle: %s\n", err)
+		return nil, fmt.Errorf("error parsing CA bundle: %s", err)
 	}
 	return bundle, nil
 }

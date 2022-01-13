@@ -19,8 +19,8 @@ package main
 import (
 	"os"
 
-	"github.com/square/certigo/cli"
-	"github.com/square/certigo/cli/terminal"
+	"github.com/rushvanth/certigo/cli"
+	"github.com/rushvanth/certigo/cli/terminal"
 )
 
 func main() {

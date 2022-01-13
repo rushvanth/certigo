@@ -34,8 +34,8 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/square/certigo/jceks"
-	"github.com/square/certigo/pkcs7"
+	"github.com/rushvanth/certigo/jceks"
+	"github.com/rushvanth/certigo/pkcs7"
 	"golang.org/x/crypto/pkcs12"
 )
 
